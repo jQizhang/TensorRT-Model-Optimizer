@@ -118,6 +118,80 @@ def get_daring_anteater(
     return dataset[split]
 
 
+def get_deepscaler(
+    tokenizer: transformers.AutoTokenizer,
+    split="train",
+    max_length=4096,
+    train_size=0,
+    eval_size=0,
+):
+
+
+    def process_and_tokenize(sample):
+        # Get problem and solution from the sample
+        problem = sample["problem"]
+        solution = sample["solution"]
+        
+        # Initialize with bos token
+        all_input_ids = [tokenizer.bos_token_id] if tokenizer.bos_token_id else []
+        all_labels = [IGNORE_INDEX] if tokenizer.bos_token_id else []
+
+        # Tokenize problem part (will be ignored in loss)
+        problem_input_ids = tokenizer.encode(problem, add_special_tokens=False)
+        all_input_ids.extend(problem_input_ids)
+        all_labels.extend([IGNORE_INDEX] * len(problem_input_ids))
+
+        # Tokenize solution part (will be used for training)
+        solution_input_ids = tokenizer.encode(solution, add_special_tokens=False)
+        all_input_ids.extend(solution_input_ids)
+        all_labels.extend(solution_input_ids)
+
+        # Add eos token
+        all_input_ids.append(tokenizer.eos_token_id)
+        all_labels.append(tokenizer.eos_token_id)
+        all_attention_mask = [1] * len(all_input_ids)
+
+        # Truncate if exceeds max_length
+        if len(all_input_ids) > max_length:
+            all_input_ids = all_input_ids[:max_length]
+            all_labels = all_labels[:max_length]
+            all_attention_mask = all_attention_mask[:max_length]
+        else:
+            # Pad if shorter than max_length
+            cur_seq_length = len(all_input_ids)
+            pad_token = (
+                tokenizer.pad_token_id
+                if tokenizer.pad_token_id is not None
+                else tokenizer.eos_token_id
+            )
+            all_input_ids += [pad_token] * (max_length - cur_seq_length)
+            all_attention_mask += [0] * (max_length - cur_seq_length)
+            all_labels += [IGNORE_INDEX] * (max_length - cur_seq_length)
+
+        return {
+            "input_ids": all_input_ids[:max_length],
+            "attention_mask": all_attention_mask[:max_length],
+            "labels": all_labels[:max_length],
+        }
+
+    if hasattr(get_deepscaler, "cached_dataset"):
+        dataset = get_deepscaler.cached_dataset
+    else:
+        with main_process_first():
+            dataset = datasets.load_dataset("agentica-org/DeepScaleR-Preview-Dataset", split="train")
+            # Shuffle and subsample the dataset
+            eval_size = 2000 if eval_size == 0 else eval_size
+            train_size = len(dataset) - eval_size if train_size == 0 else train_size
+            assert train_size + eval_size <= len(dataset) and train_size > 0 and eval_size > 0, (
+                "not enough data for train-eval split"
+            )
+            dataset = dataset.shuffle(seed=42).select(range(train_size + eval_size))
+            dataset = dataset.map(process_and_tokenize, remove_columns=list(dataset.features))
+            dataset = dataset.train_test_split(test_size=eval_size, shuffle=True, seed=42)
+        get_deepscaler.cached_dataset = dataset
+    return dataset[split]
+
+
 def make_supervised_data_module(
     dataset="Daring-Anteater",
     tokenizer: transformers.PreTrainedTokenizer = None,
@@ -130,6 +204,13 @@ def make_supervised_data_module(
             tokenizer, "train", tokenizer.model_max_length, train_size, eval_size
         )
         val_dataset = get_daring_anteater(
+            tokenizer, "test", tokenizer.model_max_length, train_size, eval_size
+        )
+    elif dataset == "deepscaler":
+        train_dataset = get_deepscaler(
+            tokenizer, "train", tokenizer.model_max_length, train_size, eval_size
+        )
+        val_dataset = get_deepscaler(
             tokenizer, "test", tokenizer.model_max_length, train_size, eval_size
         )
     else:

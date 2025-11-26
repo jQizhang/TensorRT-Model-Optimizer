@@ -66,7 +66,7 @@ DEFAULT_SAVE_STEPS=$((192 / GPU_COUNT))
 
 MODEL=${MODEL:-"meta-llama/Llama-2-7b-hf"}
 OUTPUT_DIR=${OUTPUT_DIR:-"llama2-finetune"}
-DATASET=${DATASET:-"Daring-Anteater"}
+DATASET=${DATASET:-"deepscaler"}
 MAX_SEQ_LENGTH=${MAX_SEQ_LENGTH:-4096}
 TRAIN_SIZE=${TRAIN_SIZE:-0}
 EVAL_SIZE=${EVAL_SIZE:-0}

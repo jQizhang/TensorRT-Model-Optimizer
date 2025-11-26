@@ -46,6 +46,7 @@ from utils import (
 import modelopt.torch.opt as mto
 import modelopt.torch.quantization as mtq
 from modelopt.torch.distill.plugins.huggingface import LMLogitsLoss
+from modelopt.torch.export import export_hf_checkpoint
 from modelopt.torch.quantization.plugins.transformers_trainer import QADTrainer, QATTrainer
 from modelopt.torch.utils import print_rank_0
 
@@ -104,9 +105,13 @@ class TrainingArguments(transformers.TrainingArguments):
 
 @dataclass
 class DataArguments:
+    # dataset: str = field(
+    #     default="Daring-Anteater",
+    #     metadata={"help": "Specify the dataset.", "choices": ["Daring-Anteater"]},
+    # )
     dataset: str = field(
-        default="Daring-Anteater",
-        metadata={"help": "Specify the dataset.", "choices": ["Daring-Anteater"]},
+        default="deepscaler",
+        metadata={"help": "Specify the dataset.", "choices": ["Daring-Anteater", "deepscaler"]},
     )
     train_size: int = field(
         default=0,
@@ -147,6 +152,15 @@ class QuantizationArguments:
             "help": (
                 "Whether to compress the model weights after quantization. "
                 "This is useful for reducing the model size."
+            )
+        },
+    )
+    export_hf: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to export the model in HuggingFace checkpoint format after training. "
+                "The checkpoint will be saved in the output_dir."
             )
         },
     )
@@ -272,6 +286,21 @@ def train():
         trainer.save_state()
         kwargs = {"export_student": True} if training_args.distill else {}
         trainer.save_model(training_args.output_dir, **kwargs)
+        
+        # Export HuggingFace checkpoint if requested
+        if quant_args.export_hf:
+            print_rank_0("Exporting HuggingFace checkpoint...")
+            export_dir = os.path.join(training_args.output_dir, "hf_checkpoint")
+            with torch.inference_mode():
+                export_hf_checkpoint(
+                    model,
+                    export_dir=export_dir,
+                )
+            print_rank_0(f"HuggingFace checkpoint exported to: {export_dir}")
+            
+            # Save tokenizer to the export directory
+            tokenizer.save_pretrained(export_dir)
+            print_rank_0(f"Tokenizer saved to: {export_dir}")
 
 
 if __name__ == "__main__":

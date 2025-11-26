@@ -1116,6 +1116,11 @@ def fuse_prequant_layernorm(
         fused_bias = bias * avg_pre_quant_scale
         layernorm_output_scaled = (normalization(input) * fused_weight) + fused_bias
     """
+    # Check if _pre_quant_scale exists before attempting to use it
+    if not hasattr(modules[0].input_quantizer, "_pre_quant_scale"):
+        # No pre_quant_scale to fuse, skip this operation
+        return
+    
     layernorm_module.weight = torch.nn.Parameter(
         layernorm_module.weight * getattr(modules[0].input_quantizer, "_pre_quant_scale")
     )
