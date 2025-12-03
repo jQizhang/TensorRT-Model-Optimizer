@@ -214,6 +214,7 @@ class QATTrainer(ModelOptHFTrainer):
         with calibrate_with_adapters(self.model, self.args):
             print_rank_0("Quantizing the model...")
             mtq.quantize(self.model, self.quant_cfg, forward_loop)  # type: ignore [arg-type]
+            # mtq.quantize(self.model, self.quant_cfg, None)
 
         # Save modelopt state
         self._save_modelopt_state_with_weights()

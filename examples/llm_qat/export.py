@@ -18,6 +18,7 @@ import json
 import warnings
 from pathlib import Path
 
+from modelopt.torch.utils.network import set_submodule
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -51,6 +52,7 @@ def get_model(
 
     # Restore modelopt state for LoRA models. For QAT/QAD models from_pretrained call handles this
     if hasattr(model, "peft_config"):
+        print("[lark] loading peft modelopt state")
         modelopt_state = torch.load(f"{ckpt_path}/modelopt_state_train.pth", weights_only=False)
         restore_from_modelopt_state(model, modelopt_state)
         print_rank_0("Restored modelopt state")
@@ -69,6 +71,12 @@ def main(args):
     model = get_model(args.pyt_ckpt_path, args.device)
     tokenizer = AutoTokenizer.from_pretrained(args.pyt_ckpt_path)
     is_qlora = hasattr(model, "peft_config")
+
+    for name, param in model.state_dict().items():
+        if "layers.0" in name:
+            print(f"Name: {name}, shape: {param.shape}, dtype: {param.dtype}")
+            if name == "model.layers.0.self_attn.v_proj.weight_quantizer._amax":
+                print("model.layers.0.self_attn.v_proj.weight_quantizer._amax",param)
 
     # Export HF checkpoint
     export_dir = Path(args.export_path)

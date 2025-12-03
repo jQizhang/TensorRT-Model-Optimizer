@@ -56,6 +56,18 @@ try:
 except ImportError:
     HAS_TE = False
 
+# Try to import additional TE parallel linear types used in newer Megatron-Core versions
+try:
+    from megatron.core.extensions.transformer_engine import (
+        TEColumnParallelLinear,
+        TELayerNormColumnParallelLinear,
+        TERowParallelLinear,
+    )
+
+    HAS_TE_PARALLEL_LINEAR = True
+except ImportError:
+    HAS_TE_PARALLEL_LINEAR = False
+
 logger = logging.getLogger(__name__)
 
 __all__ = []
@@ -427,6 +439,17 @@ class _QuantMegatronMLP(_MegatronMLP):
         r"weight_quantizer\.(\d+\.)*_scale$",
     ]
 
+    # def _setup(self):
+    #     """Setup parallel state for the MLP module."""
+    #     if not hasattr(self, "parallel_state") or self.parallel_state is None:
+    #         self.parallel_state = ParallelState(
+    #             mcore_parallel.get_data_parallel_group(),
+    #             tensor_parallel_group=mcore_parallel.get_tensor_model_parallel_group(),
+    #         )
+    #     # Initialize parallel state for submodules linear_fc1 and linear_fc2
+    #     self.linear_fc1.parallel_state = self.parallel_state
+    #     self.linear_fc2.parallel_state = self.parallel_state
+
 
 class _RealQuantMegatronParallelLinear(RealQuantLinear):
     allow_real_quant_gemm = True
@@ -630,7 +653,15 @@ if HAS_TE:
         """
 
         def _setup(self):
-            """Initialize quantizers for Q, K, V tensors."""
+            """Initialize quantizers for Q, K, V tensors and setup parallel state."""
+            # # Setup parallel state
+            # if not hasattr(self, "parallel_state") or self.parallel_state is None:
+            #     self.parallel_state = ParallelState(
+            #         mcore_parallel.get_data_parallel_group(),
+            #         tensor_parallel_group=mcore_parallel.get_tensor_model_parallel_group(),
+            #     )
+            
+            # Initialize quantizers
             self.q_bmm_quantizer = TensorQuantizer()
             self.k_bmm_quantizer = TensorQuantizer()
             self.v_bmm_quantizer = TensorQuantizer()
@@ -804,3 +835,82 @@ class _QuantMoELayer(QuantModule):
             super().forward(hidden_states)
             self.router.topk = original_top_k
         return super().forward(hidden_states)
+
+
+# Support for TERowParallelLinear, TEColumnParallelLinear, TELayerNormColumnParallelLinear
+# These are used in newer Megatron-Core versions with Transformer Engine integration
+if HAS_TE_PARALLEL_LINEAR:
+    import transformer_engine.pytorch.module.linear as te_linear
+
+    class _QuantTEParallelLinear(_MegatronParallelLinear):
+        """Base class for quantized TE parallel linear layers.
+
+        This class extends _MegatronParallelLinear to support Transformer Engine's
+        parallel linear implementations (TERowParallelLinear, TEColumnParallelLinear,
+        TELayerNormColumnParallelLinear).
+        """
+
+        _functionals_to_replace = [
+            (te_linear._Linear, "apply"),
+            (te_linear._Linear, "forward"),
+        ]
+
+        @staticmethod
+        def te_quantized_linear_fn(package, func_name, self, *args, **kwargs):
+            """Quantized version specifically for TE with weight first, then input."""
+            import transformer_engine as te
+
+            if te.__version__ >= "2.0":
+                weight, inputs = args[0], args[1]
+                remaining_args = args[2:]
+                output = getattr(package, func_name)(
+                    self.weight_quantizer(weight),
+                    self.input_quantizer(inputs),
+                    *remaining_args,
+                    **kwargs,
+                )
+            else:
+                weight, weight_fp8, inputs = args[0], args[1], args[2]
+                remaining_args = args[3:]
+                output = getattr(package, func_name)(
+                    self.weight_quantizer(weight),
+                    weight_fp8,
+                    self.input_quantizer(inputs),
+                    *remaining_args,
+                    **kwargs,
+                )
+            return self.output_quantizer(output)
+
+        _quantized_linear_fn = te_quantized_linear_fn
+
+    @QuantModuleRegistry.register({TERowParallelLinear: "megatron_TERowParallelLinear"})
+    class _MegatronTERowParallelLinear(_QuantTEParallelLinear, _MegatronRowParallelLinear):
+        """Quantized version of TERowParallelLinear for Megatron-Core + TE models.
+
+        This combines the TE linear quantization with Megatron's row parallel handling.
+        """
+
+        pass
+
+    @QuantModuleRegistry.register({TEColumnParallelLinear: "megatron_TEColumnParallelLinear"})
+    class _MegatronTEColumnParallelLinear(_QuantTEParallelLinear, _MegatronColumnParallelLinear):
+        """Quantized version of TEColumnParallelLinear for Megatron-Core + TE models.
+
+        This combines the TE linear quantization with Megatron's column parallel handling.
+        """
+
+        pass
+
+    @QuantModuleRegistry.register(
+        {TELayerNormColumnParallelLinear: "megatron_TELayerNormColumnParallelLinear"}
+    )
+    class _MegatronTELayerNormColumnParallelLinear(
+        _QuantTEParallelLinear, _MegatronColumnParallelLinear
+    ):
+        """Quantized version of TELayerNormColumnParallelLinear for Megatron-Core + TE models.
+
+        This is a fused LayerNorm + ColumnParallelLinear layer from Transformer Engine.
+        The quantization is applied to the linear part, while LayerNorm is preserved.
+        """
+
+        pass

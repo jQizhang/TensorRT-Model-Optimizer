@@ -510,6 +510,10 @@ class TensorQuantizer(nn.Module):
             reduce_axis = quant_utils.convert_quantization_axis_to_reduce_axis(inputs, self._axis)
             amax = quant_utils.reduce_amax(inputs, axis=reduce_axis, keepdims=True).detach()
 
+        # TODO: if we want a dynamic amax, we can uncomment the following code
+        # reduce_axis = quant_utils.convert_quantization_axis_to_reduce_axis(inputs, self._axis)
+        # amax = quant_utils.reduce_amax(inputs, axis=reduce_axis, keepdims=True).detach()
+
         amax = amax.detach() if is_torch_export_mode() else amax.data
         return amax
 
